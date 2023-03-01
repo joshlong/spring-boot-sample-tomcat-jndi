@@ -16,57 +16,117 @@
 
 package sample.tomcat.jndi;
 
-import javax.naming.NamingException;
-import javax.sql.DataSource;
-
 import org.apache.catalina.Context;
 import org.apache.catalina.startup.Tomcat;
+import org.apache.naming.java.javaURLContextFactory;
+import org.apache.tomcat.dbcp.dbcp2.BasicDataSourceFactory;
+import org.apache.tomcat.dbcp.pool2.impl.DefaultEvictionPolicy;
 import org.apache.tomcat.util.descriptor.web.ContextResource;
+import org.postgresql.Driver;
+import org.springframework.aop.SpringProxy;
+import org.springframework.aop.framework.Advised;
+import org.springframework.aot.hint.MemberCategory;
+import org.springframework.aot.hint.RuntimeHints;
+import org.springframework.aot.hint.RuntimeHintsRegistrar;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.context.embedded.tomcat.TomcatEmbeddedServletContainer;
-import org.springframework.boot.context.embedded.tomcat.TomcatEmbeddedServletContainerFactory;
+import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
+import org.springframework.boot.web.embedded.tomcat.TomcatServletWebServerFactory;
+import org.springframework.boot.web.embedded.tomcat.TomcatWebServer;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.ImportRuntimeHints;
+import org.springframework.core.DecoratingProxy;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jndi.JndiObjectFactoryBean;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
 
+import javax.naming.NamingException;
+import javax.sql.DataSource;
+import java.util.Collection;
+import java.util.Set;
+
+@ImportRuntimeHints(SampleTomcatJndiApplication.JndiHints.class)
 @SpringBootApplication
 public class SampleTomcatJndiApplication {
 
-	public static void main(String[] args) {
-		SpringApplication.run(SampleTomcatJndiApplication.class, args);
-	}
+    public static void main(String[] args) {
+        SpringApplication.run(SampleTomcatJndiApplication.class, args);
+    }
 
-	@Bean
-	public TomcatEmbeddedServletContainerFactory tomcatFactory() {
-		return new TomcatEmbeddedServletContainerFactory() {
+    @Bean
+    TomcatServletWebServerFactory configurableTomcatWebServerFactory(
+            DataSourceProperties dataSourceProperties) {
+        return new TomcatServletWebServerFactory() {
 
-			@Override
-			protected TomcatEmbeddedServletContainer getTomcatEmbeddedServletContainer(
-					Tomcat tomcat) {
-				tomcat.enableNaming();
-				return super.getTomcatEmbeddedServletContainer(tomcat);
-			}
+            @Override
+            protected TomcatWebServer getTomcatWebServer(Tomcat tomcat) {
+                tomcat.enableNaming();
+                return super.getTomcatWebServer(tomcat);
+            }
 
-			@Override
-			protected void postProcessContext(Context context) {
-				ContextResource resource = new ContextResource();
-				resource.setName("jdbc/myDataSource");
-				resource.setType(DataSource.class.getName());
-				resource.setProperty("driverClassName", "your.db.Driver");
-				resource.setProperty("url", "jdbc:yourDb");
+            @Override
+            protected void postProcessContext(Context context) {
+                var resource = new ContextResource();
+                resource.setName("jdbc/myDataSource");
+                resource.setType(DataSource.class.getName());
+                resource.setProperty("driverClassName", Driver.class.getName());
+                resource.setProperty("url", dataSourceProperties.determineUrl());
+                resource.setProperty("username", dataSourceProperties.determineUsername());
+                resource.setProperty("password", dataSourceProperties.determinePassword());
+                context.getNamingResources().addResource(resource);
+            }
+        };
+    }
 
-				context.getNamingResources().addResource(resource);
-			}
-		};
-	}
+    static class JndiHints implements RuntimeHintsRegistrar {
 
-	@Bean(destroyMethod="")
-	public DataSource jndiDataSource() throws IllegalArgumentException, NamingException {
-		JndiObjectFactoryBean bean = new JndiObjectFactoryBean();
-		bean.setJndiName("java:comp/env/jdbc/myDataSource");
-		bean.setProxyInterface(DataSource.class);
-		bean.setLookupOnStartup(false);
-		bean.afterPropertiesSet();
-		return (DataSource)bean.getObject();
-	}
+        @Override
+        public void registerHints(RuntimeHints hints, ClassLoader classLoader) {
+
+            var mcs = MemberCategory.values();
+            Set.of(javaURLContextFactory.class, DefaultEvictionPolicy.class, BasicDataSourceFactory.class)
+                    .forEach(c -> hints.reflection().registerType(c, mcs));
+
+            Set.of("org.apache.tomcat.dbcp.dbcp2.LocalStrings").forEach(rb -> hints.resources().registerResourceBundle(rb));
+
+            hints.proxies().registerJdkProxy(
+                    DataSource.class,
+                    SpringProxy.class,
+                    Advised.class,
+                    DecoratingProxy.class
+            );
+        }
+    }
+
+    @Bean(destroyMethod = "")
+    DataSource jndiDataSource() throws IllegalArgumentException, NamingException {
+        JndiObjectFactoryBean bean = new JndiObjectFactoryBean();
+        bean.setJndiName("java:comp/env/jdbc/myDataSource");
+        bean.setProxyInterface(DataSource.class);
+        bean.setLookupOnStartup(false);
+        bean.afterPropertiesSet();
+        return (DataSource) bean.getObject();
+    }
+}
+
+
+@RestController
+class CustomersHttpController {
+
+    private final JdbcTemplate template;
+
+    CustomersHttpController(JdbcTemplate template) {
+        this.template = template;
+    }
+
+    @GetMapping("/customers")
+    Collection<Customer> all() {
+        return template.query("select * from customers",
+                (rs, rowNum) -> new Customer(rs.getInt("id"), rs.getString("name")));
+    }
+}
+
+
+record Customer(Integer id, String name) {
 }
