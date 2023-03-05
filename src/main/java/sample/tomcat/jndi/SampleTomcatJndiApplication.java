@@ -41,9 +41,11 @@ import org.springframework.jndi.JndiObjectFactoryBean;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import javax.naming.InitialContext;
 import javax.naming.NamingException;
 import javax.sql.DataSource;
 import java.util.Collection;
+import java.util.Map;
 import java.util.Set;
 
 @ImportRuntimeHints(SampleTomcatJndiApplication.JndiHints.class)
@@ -88,7 +90,8 @@ public class SampleTomcatJndiApplication {
             Set.of(javaURLContextFactory.class, DefaultEvictionPolicy.class, BasicDataSourceFactory.class)
                     .forEach(c -> hints.reflection().registerType(c, mcs));
 
-            Set.of("org.apache.tomcat.dbcp.dbcp2.LocalStrings").forEach(rb -> hints.resources().registerResourceBundle(rb));
+            Set.of("org.apache.tomcat.dbcp.dbcp2.LocalStrings")
+                    .forEach(rb -> hints.resources().registerResourceBundle(rb));
 
             hints.proxies().registerJdkProxy(
                     DataSource.class,
@@ -101,7 +104,7 @@ public class SampleTomcatJndiApplication {
 
     @Bean(destroyMethod = "")
     DataSource jndiDataSource() throws IllegalArgumentException, NamingException {
-        JndiObjectFactoryBean bean = new JndiObjectFactoryBean();
+        var bean = new JndiObjectFactoryBean();
         bean.setJndiName("java:comp/env/jdbc/myDataSource");
         bean.setProxyInterface(DataSource.class);
         bean.setLookupOnStartup(false);
@@ -110,6 +113,23 @@ public class SampleTomcatJndiApplication {
     }
 }
 
+@RestController
+class DataSourceController {
+
+    private final DataSource dataSource ;
+
+    DataSourceController(DataSource dataSource) {
+        this.dataSource = dataSource;
+    }
+
+    @GetMapping("/compare")
+    Map<String, Object> direct() throws NamingException {
+        return Map.of( //
+                "direct", "" +  new InitialContext().lookup("java:comp/env/jdbc/myDataSource"), //
+                "dataSource", "" + this.dataSource //
+        );
+    }
+}
 
 @RestController
 class CustomersHttpController {

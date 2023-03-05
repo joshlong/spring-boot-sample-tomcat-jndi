@@ -1,4 +1,4 @@
-drop table customers ;
+drop table if  exists  customers ;
 create table customers
 (
     id   serial primary key,
